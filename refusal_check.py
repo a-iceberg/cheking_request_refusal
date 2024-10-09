@@ -6,24 +6,30 @@ import psycopg
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel, Literal
+from pydantic import BaseModel
+from typing import Literal, List
 
-from file_service import FileService
 from config_manager import ConfigManager
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+config_manager = ConfigManager(
+    "./data/config.json",
+    logger
+)
 
 class Step(BaseModel):
     explanation: str
     output: str
 
 class RefusalReasons(BaseModel):
-    reason: Literal[self.config_manager.get("reasons").values()]
+    reason: Literal[config_manager.get("reasons").values()]
 
 class ReasonResponse(BaseModel):
     reasons: RefusalReasons
-    steps: list[Step]
+    steps: List[Step]
     suitable_reason: str
 
 class Application:
@@ -39,14 +45,18 @@ class Application:
         )
         self.set_keys()
         self.app = FastAPI()
-        self.conn = psycopg.connect(
-			dbname="voice_ai",
-			user=os.environ.get("DB_USER", ""),
-			password=os.environ.get("DB_PASSWORD", ""),
-			host=os.environ.get("DB_HOST", ""),
-			port=os.environ.get("DB_PORT", ""),
-            autocommit=True
-		)
+        try:
+            self.conn = psycopg.connect(
+                dbname="voice_ai",
+                user=os.environ.get("DB_USER", ""),
+                password=os.environ.get("DB_PASSWORD", ""),
+                host=os.environ.get("DB_HOST", ""),
+                port=os.environ.get("DB_PORT", ""),
+                connect_timeout=None,
+                autocommit=True
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка доступа к БД: {e}")
         self.setup_routes()
         self.SEED = 654321
         self.CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
@@ -138,7 +148,7 @@ class Application:
                             f"Следующий диалог в разговоре: {conversation_text}"
                         )
                     final_text = "\n".join(full_text)
-            except Esxeption as e:
+            except Exception as e:
                 self.logger.error(f"Ошибка при работе с базой данных: {e}")
 
             try:
