@@ -3,7 +3,9 @@ version: '3.8'
 services:
   refusal_check:
     container_name: refusal_check
-    network_mode: host
+    # network_mode: host
+    ports:
+      - "8500:8500"
     restart: unless-stopped
     build:
       context: .
@@ -12,6 +14,6 @@ services:
       - TZ=Europe/Moscow
     volumes:
       - ./data:/app/data
-      - /etc/letsencrypt/live/ml.icecorp.ru/fullchain.pem:/app/data/ssl_cert.pem
-      - /etc/letsencrypt/live/ml.icecorp.ru/privkey.pem:/app/data/ssl_pkey.pem
-    command: ["/bin/sh", "-c", "if [ ! -f /app/data/auth.json ]; then echo '{\"OPENAI_API_KEY\": \"\", \"ANTHROPIC_API_KEY\": \"\", \"1С_TOKEN\": \"\", \"1C_LOGIN\": \"\", \"1C_PASSWORD\": \"\", \"CHAT_HISTORY_TOKEN\": \"\", \"DB_USER\": \"\", \"DB_PASSWORD\": \"\", \"DB_HOST\": \"\", \"DB_PORT\": \"\", \"CHANNEL_ID\": \"\", \"BOT_TOKEN\": \"\"}' > /app/data/auth.json; fi && exec gunicorn -k 'uvicorn.workers.UvicornWorker' refusal_check:app --bind '0.0.0.0:7500' --timeout 600 --keyfile=./data/ssl_pkey.pem --certfile=./data/ssl_cert.pem"]
+      #- /etc/letsencrypt/live/ml.icecorp.ru/fullchain.pem:/app/data/ssl_cert.pem
+      #- /etc/letsencrypt/live/ml.icecorp.ru/privkey.pem:/app/data/ssl_pkey.pem
+    command: ["/bin/sh", "-c", "if [ ! -f /app/data/auth.json ]; then echo '{\"OPENAI_API_KEY\": \"\", \"ANTHROPIC_API_KEY\": \"\", \"1С_TOKEN\": \"\", \"1C_LOGIN\": \"\", \"1C_PASSWORD\": \"\", \"CHAT_HISTORY_TOKEN\": \"\", \"DB_USER\": \"\", \"DB_PASSWORD\": \"\", \"DB_HOST\": \"\", \"DB_PORT\": \"\", \"CHANNEL_ID\": \"\", \"BOT_TOKEN\": \"\"}' > /app/data/auth.json; fi && exec gunicorn -k 'uvicorn.workers.UvicornWorker' refusal_check:app --bind '0.0.0.0:8500' --timeout 600 "]
