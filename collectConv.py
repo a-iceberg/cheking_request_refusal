@@ -36,7 +36,7 @@ conn = psycopg.connect(
     port=DB_PORT
 )
 with conn.cursor() as cur:
-    cur.execute(query, ('Пл2286118',))
+    cur.execute(query, ('Пл2279610',))
     results = cur.fetchall()
 
     conversations = {}

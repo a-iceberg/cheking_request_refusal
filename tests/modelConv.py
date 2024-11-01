@@ -1,5 +1,6 @@
 import psycopg
-
+import sys
+print(sys.executable)
 DB_NAME = "voice_ai"
 DB_USER = "vlad"
 DB_PASSWORD = "Vn00193396"
