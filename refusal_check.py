@@ -76,7 +76,7 @@ class Application:
         except Exception as e:
             self.logger.error(f"Ошибка доступа к БД: {e}")
         self.setup_routes()
-        self.MAX_TOKENS = 1024
+        self.MAX_TOKENS = 128
         self.SEED = 654321
         self.confidence = None
         self.CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
