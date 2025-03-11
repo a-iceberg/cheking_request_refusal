@@ -38,7 +38,7 @@ conn = psycopg.connect(
     port=DB_PORT
 )
 with conn.cursor() as cur:
-    cur.execute(query, ('Пл2285564',))
+    cur.execute(query, ('Пл2279197',))
     results = cur.fetchall()
     modeltext=set()
 

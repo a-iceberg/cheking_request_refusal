@@ -3,7 +3,7 @@ import requests
 import json
 
 
-url		= "http://192.168.56.107:8500/refusal_check/2bclpy6R6wDboaVlmcGWkSm0GrBGCoBG/Пл2277680"
+url		= "http://192.168.56.107:8500/refusal_check/2bclpy6R6wDboaVlmcGWkSm0GrBGCoBG/Пл2282001"
 
 
 
