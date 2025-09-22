@@ -193,7 +193,7 @@ class Application:
                     },
                     {"role": "user", "content": final_text}
                 ]
-                response = await client.beta.chat.completions.parse(
+                response = await client.chat.completions.parse(
                     model=self.config_manager.get("openai_model"),
                     temperature=temperature,
                     seed=self.SEED,

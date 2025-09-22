@@ -1,7 +1,7 @@
 {
-    "openai_model": "gpt-4o-2024-08-06",
-    "reserve_openai_model": "gpt-4o-2024-05-13",
-    "anthropic_model": "claude-3-5-sonnet-20240620",
+    "openai_model": "gpt-4.1-2025-04-14",
+    "reserve_openai_model": "gpt-4o-2024-08-06",
+    "anthropic_model": "claude-sonnet-4-20250514",
     "openai_temperature": 0.1,
     "anthropic_temperature": 0.1,
     "proxy_url": "https://service.icecorp.ru:7405",
