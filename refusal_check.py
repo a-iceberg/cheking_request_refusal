@@ -150,13 +150,14 @@ class Application:
                     t.linkedid,
                     t.start,
                     t.text,
+                    t.model,
                     lc.call_date
                 FROM transcribations t
                 JOIN linked_calls lc ON t.linkedid = lc.linkedid
                 WHERE t.text IS NOT NULL AND t.text <> ''
                 ORDER BY lc.call_date, t.linkedid, t.start
             )
-            SELECT linkedid, text
+            SELECT linkedid, text, model
             FROM sorted_transcriptions;
             """
 
@@ -187,11 +188,6 @@ class Application:
                 self.logger.error(f"Ошибка при работе с базой данных: {e}")
 
             try:
-                self.logger.info("start AsyncOpenAI ")
-                client = AsyncOpenAI(
-                    api_key=os.environ.get("OPENAI_API_KEY", "")
-                )
-                self.logger.info("created AsyncOpenAI ")
                 temperature = self.config_manager.get("openai_temperature")
                 messages = [
                     {
