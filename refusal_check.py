@@ -83,6 +83,12 @@ class Application:
         self.SEED = 654321
         self.confidence = None
         self.CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
+        self.OPENAI_CLIENT = AsyncOpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY", "")
+        )
+        self.ANTHROPIC_CLIENT = AsyncAnthropic(
+            api_key=os.environ.get("ANTHROPIC_API_KEY", "")
+        )
 
     def set_keys(self):
         os.environ["1С_TOKEN"] = self.auth_manager.get("1С_TOKEN", "")
@@ -197,7 +203,7 @@ class Application:
                     },
                     {"role": "user", "content": final_text}
                 ]
-                response = await client.chat.completions.parse(
+                response = await self.OPENAI_CLIENT.chat.completions.parse(
                     model=self.config_manager.get("openai_model"),
                     temperature=temperature,
                     seed=self.SEED,
@@ -248,7 +254,7 @@ class Application:
                         },
                         {"role": "user", "content": final_text}
                     ]
-                    response = await client.chat.completions.create(
+                    response = await self.OPENAI_CLIENT.chat.completions.create(
                         model=self.config_manager.get("reserve_openai_model"),
                         temperature=temperature,
                         seed=self.SEED,
@@ -267,10 +273,7 @@ class Application:
                     f"""Exceeded OpenAI quota: {oai_limit_error},
                     change to Anthropic model"""
                 )
-                client = AsyncAnthropic(
-                    api_key=os.environ.get("ANTHROPIC_API_KEY", "")
-                )
-                response = await client.messages.create(
+                response = await self.ANTHROPIC_CLIENT.messages.create(
                     model=self.config_manager.get("anthropic_model"),
                     temperature=self.config_manager.get("anthropic_temperature"),
                     max_tokens=self.MAX_TOKENS,
