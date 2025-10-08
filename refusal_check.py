@@ -78,7 +78,6 @@ class Application:
         except Exception as e:
             self.logger.error(f"Ошибка доступа к БД: {e}")
         self.setup_routes()
-        self.logger.info(f"setup_routes OK")
         self.MAX_TOKENS = 1024
         self.SEED = 654321
         self.confidence = None
@@ -122,9 +121,6 @@ class Application:
         return JSONResponse(content={"type": "text", "body": str(text)})
 
     def setup_routes(self):
-        @self.app.get("/test")
-        def test():
-            return self.text_response("not ok")
         # Endpoint for checking reguest refusal
         @self.app.get("/refusal_check/{received_token}/{bid_id}")
         async def reasons_comparsion(
@@ -182,7 +178,6 @@ class Application:
                         f"Следующий диалог в разговоре: {dialog}"
                         for dialog in parts.values()
                     )
-                    self.logger.info(f"Text for analysis: {final_text}")
             except Exception as e:
                 self.logger.error(f"Ошибка при работе с базой данных: {e}")
 
