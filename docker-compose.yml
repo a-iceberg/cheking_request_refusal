@@ -12,6 +12,4 @@ services:
       - TZ=Europe/Moscow
     volumes:
       - ./data:/app/data
-      - /etc/letsencrypt/live/ml.icecorp.ru/fullchain.pem:/app/data/ssl_cert.pem
-      - /etc/letsencrypt/live/ml.icecorp.ru/privkey.pem:/app/data/ssl_pkey.pem
-    command: ["gunicorn", "refusal_check:app", "--workers", "1", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8500", "--timeout", "600", "--keyfile", "./data/ssl_pkey.pem", "--certfile", "./data/ssl_cert.pem"]
+    command: ["gunicorn", "refusal_check:app", "--workers", "1", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8500", "--timeout", "600"]
