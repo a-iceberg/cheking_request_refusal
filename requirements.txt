@@ -1,7 +1,8 @@
-numpy==1.26.4
-fastapi==0.115.0
-uvicorn==0.31.0
+numpy==2.3.3
+fastapi==0.115.7
+uvicorn==0.31.1
 gunicorn==23.0.0
-openai==1.51.0
-anthropic==0.34.2
-psycopg[binary,pool]==3.2.3
+httpx==0.28.1
+openai==1.100.2
+anthropic==0.64.0
+psycopg[binary,pool]==3.2.4
