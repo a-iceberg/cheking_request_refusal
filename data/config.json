@@ -1,5 +1,5 @@
 {
-    "openai_model": "fb-gpt-4.1-1",
+    "openai_model": "openai/gpt-4.1",
     "reserve_openai_model": "openai/gpt-4o",
     "anthropic_model": "claude-sonnet-4-5-20250929",
     "openai_temperature": 0,
