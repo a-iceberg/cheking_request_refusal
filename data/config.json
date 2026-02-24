@@ -1,9 +1,9 @@
 {
-    "openai_model": "fb-gpt-4.1-1",
-    "reserve_openai_model": "openai/gpt-4o",
-    "anthropic_model": "claude-sonnet-4-5-20250929",
-    "openai_temperature": 0,
-    "anthropic_temperature": 0,
+    "main_model": "google/gemini-3-flash-preview",
+    "reserve_main_model": "google/gemini-2.5-flash",
+    "fallback_model": "claude-sonnet-4-5-20250929",
+    "main_temperature": 1,
+    "fallback_temperature": 0.1,
     "proxy_url": "https://service.icecorp.ru:7405",
     "reasons": {
         "Не было отказа": "000000000",
