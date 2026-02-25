@@ -219,7 +219,7 @@ class Application:
                     temperature=self.config_manager.get("main_temperature"),
                     extra_body={
                         "extra_body": {
-                            "google": {"thinking_config": {"thinking_level": "high"}}
+                            "google": {"thinking_config": {"thinking_level": "medium"}}
                         }
                     },
                     response_format=ReasonResponse,
