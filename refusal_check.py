@@ -154,6 +154,8 @@ class Application:
                 answer = "Неверный токен запроса причины отказа"
                 return self.text_response(answer)
 
+            llm_reason = None
+            final_text = None
             query = """
             WITH linked_calls AS (
                 SELECT DISTINCT
@@ -180,7 +182,7 @@ class Application:
 
             try:
                 with self.conn.cursor() as cur:
-                    self.logger.info("start executing query")
+                    self.logger.info(f"start executing query for {bid_id}")
                     cur.execute(query, (bid_id,))
                     results = cur.fetchall()
                     parts = OrderedDict()
@@ -203,39 +205,43 @@ class Application:
             except Exception as e:
                 self.logger.error(f"Ошибка при работе с базой данных: {e}")
 
-            try:
-                messages = [
-                    {
-                        "role": "developer",
-                        "content": """Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
+            if final_text and final_text != "":
+                try:
+                    messages = [
+                        {
+                            "role": "developer",
+                            "content": """Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
 Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё, пусть и похожее.
 ТОЛЬКО если вы АБСОЛЮТНО уверены, что в диалогах ТОЧНО вообще никоим образом НЕ фигурировал отказ / отмена, или клиент НЕ говорил отбой, отмените заявку и т.д. и другими способами НЕ давал понять, что услуги не нужны, или диалоги в принципе отсутствуют, ТОЛЬКО ТОГДА выбирайте соответствующий вариант из представленных - "Не было отказа".
 Возвращайте только именно ТЕКСТ самой причины ДОСЛОВНО, именно так, как она была записана ИЗНАЧАЛЬНО в списке.""",
-                    },
-                    {"role": "user", "content": final_text},
-                ]
-                response = await self.OPENAI_CLIENT.beta.chat.completions.parse(
-                    model=self.config_manager.get("main_model"),
-                    temperature=self.config_manager.get("main_temperature"),
-                    extra_body={
-                        "extra_body": {
-                            "google": {"thinking_config": {"thinking_level": "medium"}}
-                        }
-                    },
-                    response_format=ReasonResponse,
-                    messages=messages,
-                )
-                llm_reason = response.choices[0].message
-                if llm_reason.parsed:
-                    llm_reason = REASON_MAPPING[llm_reason.parsed.reason_key]
-                else:
-                    self.logger.warning(
-                        "Error in structured output, change to reserve model"
+                        },
+                        {"role": "user", "content": final_text},
+                    ]
+
+                    response = await self.OPENAI_CLIENT.beta.chat.completions.parse(
+                        model=self.config_manager.get("main_model"),
+                        temperature=self.config_manager.get("main_temperature"),
+                        extra_body={
+                            "extra_body": {
+                                "google": {
+                                    "thinking_config": {"thinking_level": "medium"}
+                                }
+                            }
+                        },
+                        response_format=ReasonResponse,
+                        messages=messages,
                     )
-                    messages = [
-                        {
-                            "role": "system",
-                            "content": """Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
+                    llm_reason = response.choices[0].message
+                    if llm_reason.parsed:
+                        llm_reason = REASON_MAPPING[llm_reason.parsed.reason_key]
+                    else:
+                        self.logger.warning(
+                            "Error in structured output, change to reserve model"
+                        )
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": """Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
 Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё, пусть и похожее.
 ТОЛЬКО если вы АБСОЛЮТНО уверены, что в диалогах ТОЧНО вообще никоим образом НЕ фигурировал отказ / отмена, или клиент НЕ говорил отбой, отмените заявку и т.д. и другими способами НЕ давал понять, что услуги не нужны, или диалоги в принципе отсутствуют, ТОЛЬКО ТОГДА выбирайте соответствующий вариант из представленных - "Не было отказа".
 Возвращайте только именно ТЕКСТ самой причины ДОСЛОВНО, именно так, как она была записана ИЗНАЧАЛЬНО в списке.
@@ -261,33 +267,34 @@ class Application:
 Нет нужных деталей на складе, либо слишком долго ждать их поставки, либо нет возможности заказать нужные детали;
 Недоступны нужные детали по причине именно устаревшей техники, снятия их с производства производителем;
 Запрос по неизвестной технике, озвучено, что именно нет документации - поэтому ничего в принципе не ясно мастеру, а НЕ просто нет деталей, например""",
-                        },
-                        {"role": "user", "content": final_text},
-                    ]
-                    response = await self.OPENAI_CLIENT.chat.completions.create(
-                        model=self.config_manager.get("reserve_main_model"),
-                        temperature=self.config_manager.get("fallback_temperature"),
-                        extra_body={
-                            "extra_body": {
-                                "google": {
-                                    "thinking_config": {"thinking_budget": "high"}
-                                }
-                            }
-                        },
-                        messages=messages,
-                    )
-                    llm_reason = response.choices[0].message.content
+                            },
+                            {"role": "user", "content": final_text},
+                        ]
 
-            except RateLimitError as oai_limit_error:
-                self.logger.error(
-                    f"""Exceeded OpenAI quota: {oai_limit_error},
-                    change to Anthropic model"""
-                )
-                response = await self.ANTHROPIC_CLIENT.messages.create(
-                    model=self.config_manager.get("fallback_model"),
-                    temperature=self.config_manager.get("fallback_temperature"),
-                    max_tokens=self.MAX_TOKENS,
-                    system="""Вы специалист по маркетингу и работе с возражениями, отказами клиентов, отменами услуг, а также профессиональный социолог.
+                        response = await self.OPENAI_CLIENT.chat.completions.create(
+                            model=self.config_manager.get("reserve_main_model"),
+                            temperature=self.config_manager.get("fallback_temperature"),
+                            extra_body={
+                                "extra_body": {
+                                    "google": {
+                                        "thinking_config": {"thinking_budget": "high"}
+                                    }
+                                }
+                            },
+                            messages=messages,
+                        )
+                        llm_reason = response.choices[0].message.content
+
+                except RateLimitError as oai_limit_error:
+                    self.logger.error(
+                        f"""Exceeded OpenAI quota: {oai_limit_error},
+                        change to Anthropic model"""
+                    )
+                    response = await self.ANTHROPIC_CLIENT.messages.create(
+                        model=self.config_manager.get("fallback_model"),
+                        temperature=self.config_manager.get("fallback_temperature"),
+                        max_tokens=self.MAX_TOKENS,
+                        system="""Вы специалист по маркетингу и работе с возражениями, отказами клиентов, отменами услуг, а также профессиональный социолог.
 Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё, пусть и похожее.
 ТОЛЬКО если вы АБСОЛЮТНО уверены, что в диалогах ТОЧНО вообще никоим образом НЕ фигурировал отказ / отмена, или клиент НЕ говорил отбой, отмените заявку и т.д. и другими способами НЕ давал понять, что услуги не нужны, или диалоги в принципе отсутствуют, ТОЛЬКО ТОГДА выбирайте соответствующий вариант из представленных - "Не было отказа".
 Возвращайте в ответе ТОЛЬКО именно ТЕКСТ самой причины ДОСЛОВНО, именно так, как она была записана ИЗНАЧАЛЬНО в списке, БЕЗ каких-либо своих размышлений!
@@ -313,16 +320,16 @@ class Application:
 Нет нужных деталей на складе, либо слишком долго ждать их поставки, либо нет возможности заказать нужные детали;
 Недоступны нужные детали по причине именно устаревшей техники, снятия их с производства производителем;
 Запрос по неизвестной технике, озвучено, что именно нет документации - поэтому ничего в принципе не ясно мастеру, а НЕ просто нет деталей, например""",
-                    messages=[
-                        {"role": "user", "content": final_text},
-                    ],
-                )
-                llm_reason = response.content[0].text
+                        messages=[
+                            {"role": "user", "content": final_text},
+                        ],
+                    )
+                    llm_reason = response.content[0].text
 
             try:
                 answer = {
                     "llm_reason_id": self.config_manager.get("reasons")[
-                        llm_reason.replace(";", "")
+                        llm_reason.replace(";", "") if llm_reason else "Не было отказа"
                     ],
                     "confidence": self.confidence if self.confidence else 2.0,
                 }
