@@ -105,7 +105,7 @@ class Application:
         self.CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
         self.OPENAI_CLIENT = AsyncOpenAI(
             api_key=os.environ.get("OPENAI_API_KEY", ""),
-            base_url="https://api.vsellm.ru/v1"
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
         self.ANTHROPIC_CLIENT = AsyncAnthropic(
             api_key=os.environ.get("ANTHROPIC_API_KEY", "")
