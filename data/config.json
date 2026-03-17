@@ -1,6 +1,6 @@
 {
-    "main_model": "google/gemini-3-flash-preview",
-    "reserve_main_model": "google/gemini-2.5-flash",
+    "main_model": "gemini-3-flash-preview",
+    "reserve_main_model": "gemini-2.5-flash",
     "fallback_model": "claude-sonnet-4-5-20250929",
     "main_temperature": 1,
     "fallback_temperature": 0.1,
