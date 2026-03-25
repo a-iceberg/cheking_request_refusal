@@ -1,14 +1,12 @@
 import logging
 import os
 import json
-
 import numpy as np
-import psycopg
 
 from collections import OrderedDict
-
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from psycopg_pool import AsyncConnectionPool
 from openai import AsyncOpenAI, RateLimitError
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel
@@ -87,17 +85,7 @@ class Application:
         )
         self.set_keys()
         self.app = FastAPI()
-        try:
-            self.conn = psycopg.connect(
-                dbname="voice_ai",
-                user=os.environ.get("DB_USER", ""),
-                password=os.environ.get("DB_PASSWORD", ""),
-                host=os.environ.get("DB_HOST", ""),
-                port=os.environ.get("DB_PORT", ""),
-                autocommit=True
-            )
-        except Exception as e:
-            self.logger.error(f"Ошибка доступа к БД: {e}")
+        self.pool = None
         self.setup_routes()
         self.MAX_TOKENS = 8192
         self.SEED = 654321
@@ -181,27 +169,36 @@ class Application:
             """
 
             try:
-                with self.conn.cursor() as cur:
-                    self.logger.info(f"start executing query for {bid_id}")
-                    cur.execute(query, (bid_id,))
-                    results = cur.fetchall()
-                    parts = OrderedDict()
-
-                    for linkedid, texts, model in results:
-                        chunk = (texts or "").strip()
-                        if not chunk:
-                            continue
-                        sep = " " if model else ". "
-                        prev = parts.get(linkedid)
-                        if prev is None:
-                            parts[linkedid] = chunk
-                        else:
-                            parts[linkedid] = f"{prev}{sep}{chunk}"
-
-                    final_text = "\n".join(
-                        f"Следующий диалог в разговоре: {dialog}"
-                        for dialog in parts.values()
+                if self.pool is None:
+                    self.pool = AsyncConnectionPool(
+                        f"dbname=voice_ai user={os.environ.get('DB_USER', '')} password={os.environ.get('DB_PASSWORD', '')} host={os.environ.get('DB_HOST', '')} port={os.environ.get('DB_PORT', '')}",
+                        min_size=1,
+                        max_size=40,
+                        max_idle=600
                     )
+
+                async with self.pool.connection() as conn:
+                    async with conn.cursor() as cursor:
+                        self.logger.info(f"start executing query for {bid_id}")
+                        await cursor.execute(query, (bid_id,))
+                        results = await cursor.fetchall()
+                        parts = OrderedDict()
+
+                        for linkedid, texts, model in results:
+                            chunk = (texts or "").strip()
+                            if not chunk:
+                                continue
+                            sep = " " if model else ". "
+                            prev = parts.get(linkedid)
+                            if prev is None:
+                                parts[linkedid] = chunk
+                            else:
+                                parts[linkedid] = f"{prev}{sep}{chunk}"
+
+                        final_text = "\n".join(
+                            f"Следующий диалог в разговоре: {dialog}"
+                            for dialog in parts.values()
+                        )
             except Exception as e:
                 self.logger.error(f"Ошибка при работе с базой данных: {e}")
 
