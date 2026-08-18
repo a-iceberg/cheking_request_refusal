@@ -146,26 +146,23 @@ class Application:
             final_text = None
             query = """
             WITH linked_calls AS (
-                SELECT DISTINCT
-                    linkedid,
-                    call_date
+                SELECT
+                    trim(linkedid) AS linkedid,
+                    min(call_date) AS call_date
                 FROM calls
                 WHERE bid_id = %s
-            ),
-            sorted_transcriptions AS (
-                SELECT 
-                    t.linkedid,
-                    t.start,
-                    t.text,
-                    t.model,
-                    lc.call_date
-                FROM transcribations t
-                JOIN linked_calls lc ON t.linkedid = lc.linkedid
-                WHERE t.text IS NOT NULL AND t.text <> '' AND lc.linkedid IS NOT NULL AND lc.linkedid <> ''
-                ORDER BY lc.call_date, t.linkedid, t.start
+                    AND linkedid IS NOT NULL
+                    AND trim(linkedid) <> ''
+                GROUP BY trim(linkedid)
             )
-            SELECT linkedid, text, model
-            FROM sorted_transcriptions;
+            SELECT 
+                t.linkedid,
+                t.text,
+                t.model
+            FROM transcribations t
+            JOIN linked_calls lc ON t.linkedid = lc.linkedid
+                WHERE t.text IS NOT NULL AND t.text <> ''
+            ORDER BY lc.call_date, t.linkedid, t.start;
             """
 
             try:
