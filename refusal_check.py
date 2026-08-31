@@ -1,18 +1,37 @@
+import asyncio
+import difflib
+import hashlib
 import logging
 import os
+import re
 import json
+import httpx
 import numpy as np
 
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from psycopg_pool import AsyncConnectionPool
-from openai import AsyncOpenAI, RateLimitError
+from openai import (
+    AsyncOpenAI,
+    BadRequestError,
+    ContentFilterFinishReasonError,
+    LengthFinishReasonError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import List, Literal
 
 from config_manager import ConfigManager
+
+
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+CACHE_RENEW_MARGIN = timedelta(seconds=60)
+REASON_MATCH_CUTOFF = 0.7
+REASON_MIN_PREFIX_WORDS = 4
 
 
 REASON_MAPPING = {
@@ -87,8 +106,17 @@ class Application:
         self.app = FastAPI()
         self.pool = None
         self.setup_routes()
-        self.MAX_TOKENS = 8192
+        self.MAX_TOKENS = 4096
         self.SEED = 654321
+        self.CACHE_TTL_SECONDS = 600
+        self.SYSTEM_PROMPT = self.build_system_prompt()
+        self.SYSTEM_PROMPT_HASH = hashlib.sha256(
+            self.SYSTEM_PROMPT.encode("utf-8")
+        ).hexdigest()[:16]
+        self.cache_name = None
+        self.cache_expires_at = None
+        self.cache_lock = asyncio.Lock()
+        self.http_client = None
         self.confidence = None
         self.CHANNEL_ID = os.environ.get("CHANNEL_ID", "")
         self.OPENAI_CLIENT = AsyncOpenAI(
@@ -129,6 +157,199 @@ class Application:
 
     def text_response(self, text):
         return JSONResponse(content={"type": "text", "body": str(text)})
+
+    def first_text_block(self, content):
+        return next(
+            (block.text for block in content if block.type == "text"),
+            None,
+        )
+
+    def normalize_reason(self, text):
+        return re.sub(r"\s+", " ", (text or "").replace(";", "")).strip().lower()
+
+    def resolve_reason_id(self, llm_reason):
+        reasons = self.config_manager.get("reasons")
+        normalized = self.normalize_reason(llm_reason)
+        words = normalized.split()
+        candidates = {name: self.normalize_reason(name) for name in reasons}
+
+        for name, candidate in candidates.items():
+            if candidate == normalized:
+                return reasons[name]
+
+        if len(words) >= REASON_MIN_PREFIX_WORDS:
+            prefixed = [
+                name for name, candidate in candidates.items()
+                if candidate.startswith(normalized)
+            ]
+            if len(prefixed) == 1:
+                self.logger.info(
+                    f"Причина определена по началу текста: {prefixed[0][:70]}"
+                )
+                return reasons[prefixed[0]]
+
+        best_name = None
+        best_score = 0.0
+        for name, candidate in candidates.items():
+            score = difflib.SequenceMatcher(
+                None, words, candidate.split()
+            ).ratio()
+            if score > best_score:
+                best_name, best_score = name, score
+
+        if best_name and best_score >= REASON_MATCH_CUTOFF:
+            self.logger.warning(
+                f"Причина сопоставлена по схожести {best_score:.2f}: {best_name[:70]}"
+            )
+            return reasons[best_name]
+
+        self.logger.error(
+            f"Причина не распознана (лучшая схожесть {best_score:.2f}), "
+            f"используется 'Не было отказа': {llm_reason}"
+        )
+        return reasons["Не было отказа"]
+
+    def build_system_prompt(self):
+        reasons_list = "\n".join(
+            f"{key} - {text}" for key, text in REASON_MAPPING.items()
+        )
+        return f"""Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
+Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё.
+ТОЛЬКО если вы АБСОЛЮТНО уверены, что в диалогах ТОЧНО вообще никоим образом НЕ фигурировал отказ / отмена, или клиент НЕ говорил отбой, отмените заявку и т.д. и другими способами НЕ давал понять, что услуги не нужны, или диалоги в принципе отсутствуют, ТОЛЬКО ТОГДА выбирайте соответствующий вариант из представленных - "Не было отказа".
+ВАЖНО: если отказ / отмена в диалогах ТОЧНО был (клиент так или иначе дал понять, что услуги / ремонт ему больше не нужны), вы ОБЯЗАНЫ выбрать причину из имеющегося списка и НЕ имеете права выбирать "Не было отказа". Если при этом ни одна причина не подходит идеально, всё равно выбирайте НАИБОЛЕЕ БЛИЗКУЮ по смыслу из имеющихся. Вариант "Не было отказа" допустим ИСКЛЮЧИТЕЛЬНО когда отказа / отмены не было вовсе, либо диалоги отсутствуют.
+Список возможных причин, каждая со своим кодом (reason_key) и описанием с ограничениями:
+{reasons_list}
+В поле reason_key верните КОД причины (например, r4) из списка выше, которая ТОЧНЕЕ всего соответствует ситуации в диалогах, строго соблюдая описание и ограничения каждой причины. В поле steps изложите рассуждения, на основании которых выбран именно этот код. Выбранный reason_key ОБЯЗАТЕЛЬНО должен соответствовать вашим рассуждениям в steps."""
+
+    async def gemini_cache_call(self, method, path, params=None, body=None):
+        if self.http_client is None:
+            self.http_client = httpx.AsyncClient(timeout=60.0)
+        response = await self.http_client.request(
+            method,
+            f"{GEMINI_BASE_URL}/{path}",
+            params=params,
+            json=body,
+            headers={"x-goog-api-key": os.environ.get("OPENAI_API_KEY", "")},
+        )
+        response.raise_for_status()
+        return response.json() if response.content else {}
+
+    async def find_existing_cache(self, display_name):
+        data = await self.gemini_cache_call("GET", "cachedContents")
+        for item in data.get("cachedContents", []):
+            if item.get("displayName") == display_name:
+                return item["name"]
+        return None
+
+    async def renew_cache(self):
+        try:
+            await self.gemini_cache_call(
+                "PATCH",
+                self.cache_name,
+                params={"updateMask": "ttl"},
+                body={"ttl": f"{self.CACHE_TTL_SECONDS}s"},
+            )
+        except Exception as e:
+            self.logger.info(f"Кэш инструкции не продлён, создаётся заново: {e}")
+            self.cache_name = None
+            self.cache_expires_at = None
+            return False
+
+        self.cache_expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=self.CACHE_TTL_SECONDS
+        )
+        return True
+
+    async def create_cache(self):
+        display_name = f"refusal-system-{self.SYSTEM_PROMPT_HASH}"
+        model = self.config_manager.get("main_model")
+        try:
+            self.cache_name = await self.find_existing_cache(display_name)
+            if self.cache_name and await self.renew_cache():
+                return self.cache_name
+
+            created = await self.gemini_cache_call(
+                "POST",
+                "cachedContents",
+                body={
+                    "model": f"models/{model}",
+                    "displayName": display_name,
+                    "systemInstruction": {
+                        "role": "system",
+                        "parts": [{"text": self.SYSTEM_PROMPT}],
+                    },
+                    "ttl": f"{self.CACHE_TTL_SECONDS}s",
+                },
+            )
+            self.cache_name = created["name"]
+            self.cache_expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=self.CACHE_TTL_SECONDS
+            )
+            self.logger.info(
+                f"Создан кэш системной инструкции: {self.cache_name}, "
+                f"токенов: {created.get('usageMetadata', {}).get('totalTokenCount')}"
+            )
+            return self.cache_name
+        except Exception as e:
+            self.logger.warning(f"Не удалось создать кэш инструкции: {e}")
+            self.cache_name = None
+            self.cache_expires_at = None
+            return None
+
+    async def get_system_cache(self):
+        async with self.cache_lock:
+            now = datetime.now(timezone.utc)
+            alive_until = self.cache_expires_at
+            if self.cache_name and alive_until:
+                if alive_until - now > CACHE_RENEW_MARGIN:
+                    return self.cache_name
+                if alive_until > now and await self.renew_cache():
+                    return self.cache_name
+            return await self.create_cache()
+
+    async def forget_system_cache(self):
+        async with self.cache_lock:
+            self.cache_name = None
+            self.cache_expires_at = None
+
+    async def parse_refusal_reason(self, final_text):
+        cache_name = await self.get_system_cache()
+        while True:
+            messages = [{"role": "user", "content": final_text}]
+            google_config = {"thinking_config": {"thinking_level": "high"}}
+            if cache_name:
+                google_config["cached_content"] = cache_name
+            else:
+                messages.insert(
+                    0,
+                    {"role": "developer", "content": self.SYSTEM_PROMPT},
+                )
+
+            try:
+                return await self.OPENAI_CLIENT.beta.chat.completions.parse(
+                    model=self.config_manager.get("main_model"),
+                    temperature=self.config_manager.get("main_temperature"),
+                    extra_body={"extra_body": {"google": google_config}},
+                    response_format=ReasonResponse,
+                    messages=messages,
+                )
+            except (
+                ValidationError,
+                LengthFinishReasonError,
+                ContentFilterFinishReasonError,
+            ) as e:
+                self.logger.warning(
+                    f"Structured output не получен ({type(e).__name__}): {e}"
+                )
+                return None
+            except (PermissionDeniedError, BadRequestError) as e:
+                if not cache_name:
+                    raise
+                self.logger.warning(
+                    f"Запрос с кэшем инструкции отклонён, повтор без кэша: {e}"
+                )
+                await self.forget_system_cache()
+                cache_name = None
 
     def setup_routes(self):
         # Endpoint for checking reguest refusal
@@ -201,38 +422,9 @@ class Application:
 
             if final_text and final_text != "":
                 try:
-                    reasons_list = "\n".join(
-                        f"{key} - {text}" for key, text in REASON_MAPPING.items()
-                    )
-                    messages = [
-                        {
-                            "role": "developer",
-                            "content": f"""Вы специалист по маркетингу и работе с возражениями, отказами клиентов, а также профессиональный социолог.
-Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё.
-ТОЛЬКО если вы АБСОЛЮТНО уверены, что в диалогах ТОЧНО вообще никоим образом НЕ фигурировал отказ / отмена, или клиент НЕ говорил отбой, отмените заявку и т.д. и другими способами НЕ давал понять, что услуги не нужны, или диалоги в принципе отсутствуют, ТОЛЬКО ТОГДА выбирайте соответствующий вариант из представленных - "Не было отказа".
-ВАЖНО: если отказ / отмена в диалогах ТОЧНО был (клиент так или иначе дал понять, что услуги / ремонт ему больше не нужны), вы ОБЯЗАНЫ выбрать причину из имеющегося списка и НЕ имеете права выбирать "Не было отказа". Если при этом ни одна причина не подходит идеально, всё равно выбирайте НАИБОЛЕЕ БЛИЗКУЮ по смыслу из имеющихся. Вариант "Не было отказа" допустим ИСКЛЮЧИТЕЛЬНО когда отказа / отмены не было вовсе, либо диалоги отсутствуют.
-Список возможных причин, каждая со своим кодом (reason_key) и описанием с ограничениями:
-{reasons_list}
-В поле reason_key верните КОД причины (например, r4) из списка выше, которая ТОЧНЕЕ всего соответствует ситуации в диалогах, строго соблюдая описание и ограничения каждой причины. В поле steps изложите рассуждения, на основании которых выбран именно этот код. Выбранный reason_key ОБЯЗАТЕЛЬНО должен соответствовать вашим рассуждениям в steps.""",
-                        },
-                        {"role": "user", "content": final_text},
-                    ]
-
-                    response = await self.OPENAI_CLIENT.beta.chat.completions.parse(
-                        model=self.config_manager.get("main_model"),
-                        temperature=self.config_manager.get("main_temperature"),
-                        extra_body={
-                            "extra_body": {
-                                "google": {
-                                    "thinking_config": {"thinking_level": "high"}
-                                }
-                            }
-                        },
-                        response_format=ReasonResponse,
-                        messages=messages,
-                    )
-                    llm_reason = response.choices[0].message
-                    if llm_reason.parsed:
+                    response = await self.parse_refusal_reason(final_text)
+                    llm_reason = response.choices[0].message if response else None
+                    if llm_reason and llm_reason.parsed:
                         llm_reason = REASON_MAPPING[llm_reason.parsed.reason_key]
                     else:
                         self.logger.warning(
@@ -274,11 +466,11 @@ class Application:
 
                         response = await self.OPENAI_CLIENT.chat.completions.create(
                             model=self.config_manager.get("reserve_main_model"),
-                            temperature=self.config_manager.get("fallback_temperature"),
+                            temperature=self.config_manager.get("main_temperature"),
                             extra_body={
                                 "extra_body": {
                                     "google": {
-                                        "thinking_config": {"thinking_budget": "high"}
+                                        "thinking_config": {"thinking_level": "high"}
                                     }
                                 }
                             },
@@ -293,7 +485,6 @@ class Application:
                     )
                     response = await self.ANTHROPIC_CLIENT.messages.create(
                         model=self.config_manager.get("fallback_model"),
-                        temperature=self.config_manager.get("fallback_temperature"),
                         max_tokens=self.MAX_TOKENS,
                         system="""Вы специалист по маркетингу и работе с возражениями, отказами клиентов, отменами услуг, а также профессиональный социолог.
 Далее представлены диалоги в рамках одной заявки в сервисный центр. Проанализируйте их все и выберите наиболее подходящую причину отказа / отмены по данной заявке из списка ниже (отказ / отмена была, если клиент отказался от услуг мастера, часто это сопровождается словами Отбой, Тогда не надо, Не актуально, Отмените заявку, Можно закрывать, Не надо приезжать, Разговор закончен и т.п.), если в диалогах в контексте отказа / отмены действительно фигурировало именно то, что вы выбираете, то есть должна быть информация именно про это в разговоре, а НЕ про что-то ещё.
@@ -326,13 +517,11 @@ class Application:
                             {"role": "user", "content": final_text},
                         ],
                     )
-                    llm_reason = response.content[0].text
+                    llm_reason = self.first_text_block(response.content)
 
             try:
                 answer = {
-                    "llm_reason_id": self.config_manager.get("reasons")[
-                        llm_reason.replace(";", "") if llm_reason else "Не было отказа"
-                    ],
+                    "llm_reason_id": self.resolve_reason_id(llm_reason),
                     "confidence": self.confidence if self.confidence else 2.0,
                 }
                 self.logger.info(f"Answer: {answer}")

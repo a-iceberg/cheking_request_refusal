@@ -1,9 +1,8 @@
 {
     "main_model": "gemini-3-flash-preview",
-    "reserve_main_model": "gemini-2.5-flash",
-    "fallback_model": "claude-sonnet-4-5-20250929",
+    "reserve_main_model": "gemini-3.5-flash-lite",
+    "fallback_model": "claude-sonnet-5",
     "main_temperature": 1,
-    "fallback_temperature": 0.1,
     "proxy_url": "https://service.icecorp.ru:7405",
     "reasons": {
         "Не было отказа": "000000000",
